@@ -9,10 +9,6 @@ start_time = time.time()
 
 EXTENSIONS_DIR = "extensions"
 
-import logging
-import os
-import subprocess
-
 # ANSI color codes
 YELLOW = "\033[33m"
 GREEN = "\033[32m"
