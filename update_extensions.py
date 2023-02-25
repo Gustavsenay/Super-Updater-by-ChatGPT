@@ -1,93 +1,97 @@
 import os
-import subprocess
 import time
-import logging
-from multiprocessing import Pool
-import shutil
+import multiprocessing
+import subprocess
+from multiprocessing import Lock
 
-start_time = time.time()
-
-EXTENSIONS_DIR = "extensions"
-
-# ANSI color codes
-YELLOW = "\033[33m"
-GREEN = "\033[32m"
+# ANSI escape codes for colors
 RED = "\033[31m"
-DEFAULT = "\033[0m"
-SMALL = "\033[2m"
-MONO = "\033[1m\033[37m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+RESET = "\033[0m"
 
-# create logger
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-# create console handler with no formatting
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter("%(message)s"))
-console_handler.flush = lambda: None  # disable handler buffering
-logger.addHandler(console_handler)
-
-def update_folder(folder):
+def update_repository(repo_path):
     try:
-        result = subprocess.run(["git", "status"], cwd=folder, check=True, capture_output=True, stdin=subprocess.DEVNULL)
-        padding = ' ' + '-' * (48 - len(os.path.basename(folder))) + ' '
-        if "Your branch is up to date" not in result.stdout.decode():
-            logger.info(f"{YELLOW}Updating {os.path.basename(folder)}...{DEFAULT}")
-            pull_result = subprocess.run(["git", "pull"], cwd=folder, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
-            logger.info(pull_result.stdout.decode())
-            return True
-        else:
-            logger.info(fr"{os.path.basename(folder)}{GREEN}{padding}Already up to date{DEFAULT}")
-            return False
-    except subprocess.CalledProcessError as error:
-        logger.error(f"{os.path.basename(folder)}{RED}{padding}Error: {error.stderr.decode().strip()}{DEFAULT}")
-        return False
-
-        
-def update_extensions(folder):
-    if os.path.isdir(folder):
-        if update_folder(folder):
-            try:
-                result = subprocess.run(["git", "log", "-1"], cwd=folder, check=True, capture_output=True)
-                commit = result.stdout.decode().strip()
-                return f"{os.path.basename(folder)}: {GREEN}{commit}{DEFAULT}"
-            except subprocess.CalledProcessError as error:
-                return f"{os.path.basename(folder)}: {RED}{error.stderr.decode().strip()}{DEFAULT}"
-        else:
-            return None
-
-def update_extensions_parallel(extension_folders):
-    with Pool(processes=os.cpu_count()) as pool:
-        results = pool.map(update_extensions, extension_folders)
-    updated_extensions = [folder for folder, result in zip(extension_folders, results) if result is not None and not result.startswith(f"{os.path.basename(folder)} - Already up to date")]
-    results = [result if not result.startswith(f"{os.path.basename(folder)} - Already up to date") else f"{os.path.basename(folder)} ┃ {result}" for folder, result in zip(extension_folders, results) if result is not None]
-
-    return "\n".join(results), updated_extensions
-
-def main():
-    logger.info(f"{YELLOW}UPDATING EVERYTHING{DEFAULT}".center(shutil.get_terminal_size().columns or 50, " "))
-    main_folder = os.path.dirname(os.path.abspath(__file__))
-    update_folder(main_folder)
-    
-    extensions_path = os.path.join(main_folder, EXTENSIONS_DIR)
-    extension_folders = [os.path.join(extensions_path, folder) for folder in os.listdir(extensions_path)]
-    results, updated_extensions = update_extensions_parallel(extension_folders)
-    logger.info(f"{results}")
-    logger.info(f"{YELLOW}UPDATING FINISHED{DEFAULT}".center(shutil.get_terminal_size().columns, " "))
-
-    # Collect and print updating results
-    if updated_extensions:
-        logger.info(f"{'EXTENSION NAME'} | {'STATUS'.rjust(shutil.get_terminal_size().columns)}")
-        for extension in updated_extensions:
-            logger.info(extension)
-    else:
-        logger.info(f"{GREEN}No extensions updated")
-
-    elapsed_time = time.time() - start_time
-    logger.info(f"{YELLOW}time to update: {elapsed_time:.2f} seconds{DEFAULT}".center(shutil.get_terminal_size().columns, " "))
-    logger.propagate = False  # prevent log messages from being propagated up the logger hierarchy
-
+        subprocess.run(["git", "fetch"], cwd=repo_path, check=True)
+        return "SUCCESS", repo_path
+    except subprocess.CalledProcessError as e:
+        return "ERROR", repo_path, str(e)
+    except Exception as e:
+        return "EXCEPTION", repo_path, str(e)
 
 if __name__ == "__main__":
-    main()
+    extensions_folder = "extensions"
+
+    # Find all subdirectories in extensions folder that contain a .git directory
+    git_dirs = [os.path.join(extensions_folder, d) for d in os.listdir(extensions_folder) if os.path.isdir(os.path.join(extensions_folder, d, ".git"))]
+
+    # Set the number of processes to use and divide the repositories into groups
+    num_processes = multiprocessing.cpu_count()
+    repo_groups = [git_dirs[i:i+num_processes] for i in range(0, len(git_dirs), num_processes)]
+
+    # Create a lock to ensure that only one process updates a repository at a time
+    lock = Lock()
+
+    # Update each repository in parallel using multiprocessing
+    print(f"{YELLOW}Updating Git repositories in parallel...{RESET}")
+    start_time = time.time()
+    with multiprocessing.Pool(processes=num_processes) as pool:
+        results = []
+        for i, group in enumerate(repo_groups):
+            for repo in group:
+                results.append(pool.apply_async(update_repository, (repo,)))
+                print(f"\033[KUpdating repository {i*num_processes+1} to {(i+1)*num_processes}...\r",)
+                 
+                
+                
+            while not all(result.ready() for result in results):
+                time.sleep(0.1)
+            print("\033[K\033[1A\033[K", end="")
+    end_time = time.time()
+
+    # Print summary
+    # Print summary
+    print(f"\033[KUpdated {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds.")
+    num_success = 0
+    num_skipped = 0
+    successes = []
+    errors = []
+    exceptions = []
+    skipped = []
+    for result in results:
+        status, repo_path, *message = result.get()
+        if status == "SUCCESS":
+            num_success += 1
+            successes.append(os.path.basename(repo_path))
+        elif status == "ERROR":
+            errors.append(os.path.basename(repo_path))
+            print(f"  \033[31mERROR\033[0m: {os.path.basename(repo_path)} - {message[0]}")
+        elif status == "EXCEPTION":
+            exceptions.append(os.path.basename(repo_path))
+            print(f"  \033[33mEXCEPTION\033[0m: {os.path.basename(repo_path)} - {message[0]}")
+        elif status == "SKIPPED":
+            num_skipped += 1
+            skipped.append(os.path.basename(repo_path))
+            print(f"  \033[35mSKIPPED\033[0m: {os.path.basename(repo_path)}")
+
+    # Print detailed report of successful updates
+    print("Fetch report:")
+    for success in successes:
+        print(f"  \033[32mSUCCESS\033[0m: {success}")
+    for skip in skipped:
+        print(f"  \033[35mSKIPPED\033[0m: {skip}")
+    for error in errors:
+        print(f"  \033[31mERROR\033[0m: {error}")
+    for exception in exceptions:
+        print(f"  \033[33mEXCEPTION\033[0m: {exception}")
+
+    # Print summary of updates and skipped folders
+    if num_skipped > 0 and len(errors) > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped; {len(errors)} errors.")
+    elif num_skipped > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped.")
+    elif len(errors) > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {len(errors)} errors.")
+    else:
+        print(f"\033[K{num_success} repositories updated successfully.")
