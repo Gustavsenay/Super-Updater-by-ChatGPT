@@ -1,6 +1,5 @@
 import os
 import time
-import git
 import multiprocessing
 import subprocess
 from multiprocessing import Lock
@@ -9,22 +8,14 @@ from multiprocessing import Lock
 RED = "\033[31m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
+BLUE = "\033[34m"
 RESET = "\033[0m"
 
 def update_repository(repo_path):
     try:
-        repo = git.Repo(repo_path)
-        remote_branch = repo.remote().refs[0]
-        local_branch = repo.heads[0]
-
-        if local_branch.commit == remote_branch.commit:
-            return "UP-TO-DATE", repo_path
-
-        repo.remote().fetch()
-        local_branch.commit = remote_branch.commit
+        subprocess.run(["git", "fetch"], cwd=repo_path, check=True)
         return "SUCCESS", repo_path
-
-    except git.exc.GitCommandError as e:
+    except subprocess.CalledProcessError as e:
         return "ERROR", repo_path, str(e)
     except Exception as e:
         return "EXCEPTION", repo_path, str(e)
@@ -58,12 +49,11 @@ if __name__ == "__main__":
             print("\033[K\033[1A\033[K", end="")
     end_time = time.time()
 
-
     # Print summary
+    print(f"\033[KUpdated {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds.")
     num_success = 0
     num_skipped = 0
     successes = []
-    up_to_date = []
     errors = []
     exceptions = []
     skipped = []
@@ -72,32 +62,40 @@ if __name__ == "__main__":
         if status == "SUCCESS":
             num_success += 1
             successes.append(os.path.basename(repo_path))
-        elif status == "UP-TO-DATE":
-            num_success += 1
-            up_to_date.append(os.path.basename(repo_path))
         elif status == "ERROR":
             errors.append(os.path.basename(repo_path))
-            print(f"  \033[31mERROR\033[0m: {os.path.basename(repo_path)} - {message[0]}")
+            error_message = f"{os.path.basename(repo_path)} - {message[0]}"
+            print(f"  \033[31mERROR\033[0m: {error_message}")
+            with open("error_log.txt", "a") as log_file:
+                log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} ERROR: {error_message}\n")
         elif status == "EXCEPTION":
             exceptions.append(os.path.basename(repo_path))
-            print(f"  \033[33mEXCEPTION\033[0m: {os.path.basename(repo_path)} - {message[0]}")
+            exception_message = f"{os.path.basename(repo_path)} - {message[0]}"
+            print(f"  \033[33mEXCEPTION\033[0m: {exception_message}")
+            with open("error_log.txt", "a") as log_file:
+                log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} EXCEPTION: {exception_message}\n")
         elif status == "SKIPPED":
             num_skipped += 1
             skipped.append(os.path.basename(repo_path))
             print(f"  \033[35mSKIPPED\033[0m: {os.path.basename(repo_path)}")
 
-
     # Print detailed report of successful updates
-    print(f"{YELLOW}Git Fetch report:{RESET}")
+    print("Fetch report:")
     for success in successes:
         print(f"  \033[32mSUCCESS\033[0m: {success}")
-    for up_to_date in up_to_date:
-        print(f"  \033[36mUP-TO-DATE\033[0m: {up_to_date}")
     for skip in skipped:
         print(f"  \033[35mSKIPPED\033[0m: {skip}")
     for error in errors:
         print(f"  \033[31mERROR\033[0m: {error}")
     for exception in exceptions:
         print(f"  \033[33mEXCEPTION\033[0m: {exception}")
-        
-    print(f"{YELLOW}\033[KProcessed {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds{RESET}")
+
+    # Print summary of updates and skipped folders
+    if num_skipped > 0 and len(errors) > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped; {len(errors)} errors.")
+    elif num_skipped > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped.")
+    elif len(errors) > 0:
+        print(f"\033[K{num_success} repositories updated successfully; {len(errors)} errors.")
+    else:
+        print(f"\033[K{num_success} repositories updated successfully.")
