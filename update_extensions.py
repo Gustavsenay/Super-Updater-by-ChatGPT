@@ -1,5 +1,6 @@
 import os
 import time
+import git
 import multiprocessing
 import subprocess
 from multiprocessing import Lock
@@ -8,14 +9,22 @@ from multiprocessing import Lock
 RED = "\033[31m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
-BLUE = "\033[34m"
 RESET = "\033[0m"
 
 def update_repository(repo_path):
     try:
-        subprocess.run(["git", "fetch"], cwd=repo_path, check=True)
+        repo = git.Repo(repo_path)
+        remote_branch = repo.remote().refs[0]
+        local_branch = repo.heads[0]
+
+        if local_branch.commit == remote_branch.commit:
+            return "UP-TO-DATE", repo_path
+
+        repo.remote().fetch()
+        local_branch.commit = remote_branch.commit
         return "SUCCESS", repo_path
-    except subprocess.CalledProcessError as e:
+
+    except git.exc.GitCommandError as e:
         return "ERROR", repo_path, str(e)
     except Exception as e:
         return "EXCEPTION", repo_path, str(e)
@@ -34,28 +43,27 @@ if __name__ == "__main__":
     lock = Lock()
 
     # Update each repository in parallel using multiprocessing
-    print(f"{YELLOW}Updating Git repositories in parallel...{RESET}")
+    print(f"{YELLOW}Super-Updater-by-ChatGP{RESET}") 
+    
     start_time = time.time()
+
     with multiprocessing.Pool(processes=num_processes) as pool:
         results = []
         for i, group in enumerate(repo_groups):
             for repo in group:
                 results.append(pool.apply_async(update_repository, (repo,)))
-                print(f"\033[KUpdating repository {i*num_processes+1} to {(i+1)*num_processes}...\r",)
-                 
-                
-                
+            print(f"\033[KUpdating repository {i*num_processes+1} to {(i+1)*num_processes}...\r")
             while not all(result.ready() for result in results):
                 time.sleep(0.1)
             print("\033[K\033[1A\033[K", end="")
     end_time = time.time()
 
+
     # Print summary
-    # Print summary
-    print(f"\033[KUpdated {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds.")
     num_success = 0
     num_skipped = 0
     successes = []
+    up_to_date = []
     errors = []
     exceptions = []
     skipped = []
@@ -64,6 +72,9 @@ if __name__ == "__main__":
         if status == "SUCCESS":
             num_success += 1
             successes.append(os.path.basename(repo_path))
+        elif status == "UP-TO-DATE":
+            num_success += 1
+            up_to_date.append(os.path.basename(repo_path))
         elif status == "ERROR":
             errors.append(os.path.basename(repo_path))
             print(f"  \033[31mERROR\033[0m: {os.path.basename(repo_path)} - {message[0]}")
@@ -75,23 +86,18 @@ if __name__ == "__main__":
             skipped.append(os.path.basename(repo_path))
             print(f"  \033[35mSKIPPED\033[0m: {os.path.basename(repo_path)}")
 
+
     # Print detailed report of successful updates
-    print("Fetch report:")
+    print(f"{YELLOW}Git Fetch report:{RESET}")
     for success in successes:
         print(f"  \033[32mSUCCESS\033[0m: {success}")
+    for up_to_date in up_to_date:
+        print(f"  \033[36mUP-TO-DATE\033[0m: {up_to_date}")
     for skip in skipped:
         print(f"  \033[35mSKIPPED\033[0m: {skip}")
     for error in errors:
         print(f"  \033[31mERROR\033[0m: {error}")
     for exception in exceptions:
         print(f"  \033[33mEXCEPTION\033[0m: {exception}")
-
-    # Print summary of updates and skipped folders
-    if num_skipped > 0 and len(errors) > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped; {len(errors)} errors.")
-    elif num_skipped > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped.")
-    elif len(errors) > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {len(errors)} errors.")
-    else:
-        print(f"\033[K{num_success} repositories updated successfully.")
+        
+    print(f"{YELLOW}\033[KProcessed {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds{RESET}")
