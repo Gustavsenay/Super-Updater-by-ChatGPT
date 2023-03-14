@@ -9,16 +9,35 @@ RED = "\033[31m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
 BLUE = "\033[34m"
+MAGENTA = "\033[35m"
 RESET = "\033[0m"
 
 def update_repository(repo_path):
     try:
-        subprocess.run(["git", "fetch"], cwd=repo_path, check=True)
-        return "SUCCESS", repo_path
+        # Check for updates
+        result = subprocess.run(["git", "fetch", "--dry-run"], cwd=repo_path, check=True, capture_output=True, text=True)
+        output = result.stderr.strip()
+
+        if output:
+            # Apply updates
+            subprocess.run(["git", "fetch"], cwd=repo_path, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return "SUCCESS", repo_path
+        else:
+            return "UP_TO_DATE", repo_path
     except subprocess.CalledProcessError as e:
         return "ERROR", repo_path, str(e)
     except Exception as e:
         return "EXCEPTION", repo_path, str(e)
+
+def print_result(status, repo_name, message=None):
+    if message:
+        print(f"  {status} {repo_name} - {message}")
+    else:
+        print(f"  {status} {repo_name}")
+
+def log_error(status, message):
+    with open("error_log.txt", "a") as log_file:
+        log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {status}: {message}\n")
 
 if __name__ == "__main__":
     extensions_folder = "extensions"
@@ -34,7 +53,7 @@ if __name__ == "__main__":
     lock = Lock()
 
     # Update each repository in parallel using multiprocessing
-    print(f"{YELLOW}Super-Updater-by-ChatGP{RESET}") 
+    print(f"{YELLOW}Super-Updater-by-ChatGPT{RESET}") 
     
     start_time = time.time()
 
@@ -52,50 +71,45 @@ if __name__ == "__main__":
     # Print summary
     print(f"\033[KUpdated {len(git_dirs)} Git repositories in {end_time - start_time:.2f} seconds.")
     num_success = 0
-    num_skipped = 0
+    num_up_to_date = 0
     successes = []
     errors = []
     exceptions = []
-    skipped = []
+    up_to_date = []
+    
     for result in results:
         status, repo_path, *message = result.get()
+        repo_name = os.path.basename(repo_path)
         if status == "SUCCESS":
             num_success += 1
-            successes.append(os.path.basename(repo_path))
+            successes.append(repo_name)
+        elif status == "UP_TO_DATE":
+            num_up_to_date += 1
+            up_to_date.append(repo_name)
         elif status == "ERROR":
-            errors.append(os.path.basename(repo_path))
-            error_message = f"{os.path.basename(repo_path)} - {message[0]}"
-            print(f"  \033[31mERROR\033[0m: {error_message}")
-            with open("error_log.txt", "a") as log_file:
-                log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} ERROR: {error_message}\n")
+            errors.append(repo_name)
+            error_message = f"{repo_name} - {message[0]}"
+            print_result(RED + "ERROR" + RESET, repo_name, message[0])
+            log_error("ERROR", error_message)
         elif status == "EXCEPTION":
-            exceptions.append(os.path.basename(repo_path))
-            exception_message = f"{os.path.basename(repo_path)} - {message[0]}"
-            print(f"  \033[33mEXCEPTION\033[0m: {exception_message}")
-            with open("error_log.txt", "a") as log_file:
-                log_file.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} EXCEPTION: {exception_message}\n")
-        elif status == "SKIPPED":
-            num_skipped += 1
-            skipped.append(os.path.basename(repo_path))
-            print(f"  \033[35mSKIPPED\033[0m: {os.path.basename(repo_path)}")
+            exceptions.append(repo_name)
+            exception_message = f"{repo_name} - {message[0]}"
+            print_result(YELLOW + "EXCEPTION" + RESET, repo_name, message[0])
+            log_error("EXCEPTION", exception_message)
 
-    # Print detailed report of successful updates
+    # Print fetch report
     print("Fetch report:")
-    for success in successes:
-        print(f"  \033[32mSUCCESS\033[0m: {success}")
-    for skip in skipped:
-        print(f"  \033[35mSKIPPED\033[0m: {skip}")
-    for error in errors:
-        print(f"  \033[31mERROR\033[0m: {error}")
-    for exception in exceptions:
-        print(f"  \033[33mEXCEPTION\033[0m: {exception}")
+    for repo_name in successes:
+        print_result(GREEN + "SUCCESS" + RESET, repo_name)
+    for repo_name in up_to_date:
+        print_result(BLUE + "UP_TO_DATE" + RESET, repo_name)
+    for repo_name in errors:
+        print_result(RED + "ERROR" + RESET, repo_name)
+    for repo_name in exceptions:
+        print_result(YELLOW + "EXCEPTION" + RESET, repo_name)
 
-    # Print summary of updates and skipped folders
-    if num_skipped > 0 and len(errors) > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped; {len(errors)} errors.")
-    elif num_skipped > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {num_skipped} folders skipped.")
-    elif len(errors) > 0:
-        print(f"\033[K{num_success} repositories updated successfully; {len(errors)} errors.")
-    else:
-        print(f"\033[K{num_success} repositories updated successfully.")
+
+    print(f"{len(successes)} repositories updated successfully.")
+    print(f"{len(errors)} repositories failed with errors.")
+    print(f"{len(exceptions)} repositories encountered exceptions.")
+    print(f"{len(up_to_date)} repositories already up to date.")
